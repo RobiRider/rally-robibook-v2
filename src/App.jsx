@@ -964,7 +964,7 @@ export default function App() {
       tulipId: 'custom', 
       customTulip: {...defaultCustomTulip}, 
       infoIcons: [], 
-      notes: 'WPT MAPA', 
+      notes: 'Punto Mapa', 
       terrain: 'asfalto', 
       isReset: false,
       lat: point.lat,
@@ -1042,7 +1042,7 @@ const handleFileUpload = (e) => {
           const name = w.getElementsByTagName('name')[0]?.textContent || 
                        w.getElementsByTagName('desc')[0]?.textContent || 
                        w.getElementsByTagName('cmt')[0]?.textContent ||
-                       "WPT";
+                       "Punto GPX";
 
           // Calculamos dónde cae este punto en el kilometraje del track
           let closest = trackData[0] || { dist: 0 }; 
