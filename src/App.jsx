@@ -1081,7 +1081,7 @@ const handleFileUpload = (e) => {
     e.target.value = null;
   };
 
-  const handleManualOpen = () => window.open(`public/data/Manual.pdf`, '_blank');
+  const handleManualOpen = () => window.open(`data/Manual.pdf`, '_blank');
     
   return (
     <div id="main-app-container" tabIndex="-1" className="min-h-screen bg-gray-200 text-black font-sans focus:outline-none flex flex-col h-screen overflow-hidden print:block print:h-auto print:overflow-visible print:bg-white">
