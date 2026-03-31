@@ -997,51 +997,92 @@ export default function App() {
     });
   }, [roadbook.map(r => r.totalDist + '_' + (r.isReset ? '1' : '0')).join(',')]);
   
-  const handleFileUpload = (e) => {
+const handleFileUpload = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
     const reader = new FileReader(); 
     reader.onload = (event) => {
       const xml = new DOMParser().parseFromString(event.target.result, "text/xml");
       
-      // EXTRAER TRACK PARA EL VISOR SVG
-      const trk = Array.from(xml.getElementsByTagName('trkpt')).map(p => ({ 
-          lat: parseFloat(p.getAttribute('lat')), 
-          lng: parseFloat(p.getAttribute('lon')) 
-      }));
+      // 1. EXTRAER TRACK (Línea del mapa)
+      // Buscamos trkpt (tracks), rtept (rutas) o incluso wpt si solo hay puntos
+      let trackNodes = Array.from(xml.getElementsByTagName('trkpt'));
+      if (trackNodes.length === 0) {
+        trackNodes = Array.from(xml.getElementsByTagName('rtept'));
+      }
+      if (trackNodes.length === 0) {
+        trackNodes = Array.from(xml.getElementsByTagName('wpt'));
+      }
+
+      let trackData = [];
       let dist = 0;
-      const points = trk.map((p, i) => { 
-          if (i > 0) dist += haversineDistance(trk[i-1].lat, trk[i-1].lng, p.lat, p.lng); 
-          return { ...p, dist }; 
-      });
-      setGpxTrack(points);
-      
-      const wpts = Array.from(xml.getElementsByTagName('wpt')).map(w => {
-        const lat = parseFloat(w.getAttribute('lat')), lng = parseFloat(w.getAttribute('lon'));
-        let closest = points[0] || { dist: 0 }; let minErr = Infinity;
-        if (points.length > 0) {
-          points.forEach(p => { const err = Math.abs(lat-p.lat) + Math.abs(lng-p.lng); if (err < minErr) { minErr = err; closest = p; } });
+      trackNodes.forEach((p, i) => {
+        const lat = parseFloat(p.getAttribute('lat'));
+        const lng = parseFloat(p.getAttribute('lon'));
+        if (!isNaN(lat) && !isNaN(lng)) {
+          if (trackData.length > 0) dist += haversineDistance(trackData[trackData.length-1].lat, trackData[trackData.length-1].lng, lat, lng);
+          trackData.push({ lat, lng, dist });
         }
-        return { 
-          id: crypto.randomUUID(), 
-          totalDist: parseFloat(closest.dist.toFixed(2)), 
-          partialDist: 0, 
-          tulipId: 'custom', 
-          customTulip: {...defaultCustomTulip}, 
-          infoIcons: [], 
-          notes: (w.getElementsByTagName('name')[0]?.textContent || "WPT").toUpperCase(), 
-          terrain: 'asfalto', 
-          isReset: false,
-          lat: lat,
-          lng: lng
-        };
       });
-      setRoadbook(wpts.sort((a,b) => a.totalDist - b.totalDist));
+      setGpxTrack(trackData);
+      
+      // 2. EXTRAER PUNTOS INTERMEDIOS (Waypoints y Giros)
+      const wpts = Array.from(xml.getElementsByTagName('wpt'));
+      const rtepts = Array.from(xml.getElementsByTagName('rtept'));
+      // Unimos todo lo que pueda ser un punto de interés
+      const allPoints = [...wpts, ...rtepts];
+
+      if (allPoints.length > 0) {
+        const extractedRoadbook = allPoints.map(w => {
+          const lat = parseFloat(w.getAttribute('lat'));
+          const lng = parseFloat(w.getAttribute('lon'));
+
+          // Intentamos sacar el nombre de cualquier etiqueta común
+          const name = w.getElementsByTagName('name')[0]?.textContent || 
+                       w.getElementsByTagName('desc')[0]?.textContent || 
+                       w.getElementsByTagName('cmt')[0]?.textContent ||
+                       "WPT";
+
+          // Calculamos dónde cae este punto en el kilometraje del track
+          let closest = trackData[0] || { dist: 0 }; 
+          let minErr = Infinity;
+          if (trackData.length > 0) {
+            trackData.forEach(p => { 
+              const err = Math.pow(lat-p.lat, 2) + Math.pow(lng-p.lng, 2); 
+              if (err < minErr) { minErr = err; closest = p; } 
+            });
+          }
+
+          return { 
+            id: crypto.randomUUID(), 
+            totalDist: parseFloat(closest.dist.toFixed(2)), 
+            partialDist: 0, 
+            tulipId: 'custom', 
+            customTulip: {...defaultCustomTulip}, 
+            infoIcons: [], 
+            notes: name.toUpperCase().substring(0, 50), 
+            terrain: 'asfalto', 
+            isReset: false,
+            lat: lat,
+            lng: lng
+          };
+        });
+
+        // Ordenamos por distancia y filtramos duplicados (puntos a menos de 10 metros)
+        const cleanRoadbook = extractedRoadbook
+          .sort((a,b) => a.totalDist - b.totalDist)
+          .filter((item, pos, ary) => !pos || (item.totalDist - ary[pos - 1].totalDist > 0.01));
+
+        setRoadbook(cleanRoadbook);
+      }
     }; 
-    reader.readAsText(e.target.files[0]); 
+    reader.readAsText(file); 
     e.target.value = null;
   };
-  
+
   const handleManualOpen = () => window.open(`public/data/Manual.pdf`, '_blank');
-  
+    
   return (
     <div id="main-app-container" tabIndex="-1" className="min-h-screen bg-gray-200 text-black font-sans focus:outline-none flex flex-col h-screen overflow-hidden print:block print:h-auto print:overflow-visible print:bg-white">
       
