@@ -1,3 +1,26 @@
+const JUNCTION_TEMPLATES = {
+  t_junction: [
+    // Variante 0: T Izquierda
+    [{ id: 'm1', type: 'main', points: [{x: 50, y: 90}, {x: 50, y: 10}], thickness: 5 },
+     { id: 's1', type: 'secondary', points: [{x: 10, y: 50}, {x: 50, y: 50}], thickness: 3.5 }],
+    // Variante 1: T Derecha
+    [{ id: 'm1', type: 'main', points: [{x: 50, y: 90}, {x: 50, y: 10}], thickness: 5 },
+     { id: 's1', type: 'secondary', points: [{x: 50, y: 50}, {x: 90, y: 50}], thickness: 3.5 }]
+  ],
+  cross: [
+    // Variante 0: Cruz estándar
+    [{ id: 'm1', type: 'main', points: [{x: 50, y: 90}, {x: 50, y: 10}], thickness: 5 },
+     { id: 's1', type: 'secondary', points: [{x: 10, y: 50}, {x: 90, y: 50}], thickness: 3.5 }]
+  ],
+  y_split: [
+    // Variante 0: Principal Izquierda, Secundaria Derecha
+    [{ id: 'm1', type: 'main', points: [{x: 50, y: 90}, {x: 50, y: 60}, {x: 20, y: 30}], thickness: 5 },
+     { id: 's1', type: 'secondary', points: [{x: 50, y: 60}, {x: 80, y: 30}], thickness: 3.5 }],
+    // Variante 1: Principal Derecha, Secundaria Izquierda
+    [{ id: 'm1', type: 'main', points: [{x: 50, y: 90}, {x: 50, y: 60}, {x: 80, y: 30}], thickness: 5 },
+     { id: 's1', type: 'secondary', points: [{x: 50, y: 60}, {x: 20, y: 30}], thickness: 3.5 }]
+  ]
+};
 import React, { useState, useRef, useEffect } from 'react';
 import { 
   Upload, Plus, Printer, Trash2, MapPin, AlertTriangle, Info, 
@@ -162,6 +185,16 @@ const catmullRom2bezier = (points) => {
     d += `C ${cp1x},${cp1y} ${cp2x},${cp2y} ${p2.x},${p2.y} `;
   }
   return d;
+};
+
+const pointsToPath = (points, isStraight) => {
+  if (!points || points.length < 2) return '';
+  if (isStraight) {
+    // Dibuja líneas rectas entre puntos (estilo ángulo 90º)
+    return `M ${points[0].x},${points[0].y} ` + points.slice(1).map(p => `L ${p.x},${p.y}`).join(' ');
+  }
+  // Dibuja la curva suave de antes
+  return catmullRom2bezier(points);
 };
 
 const defaultCustomTulip = { 
@@ -428,10 +461,10 @@ function StaticTulipRenderer({ data, id }) {
         const isMain = p.type === 'main';
         const isEntry = p.type === 'entry';
         const color = (isMain || isEntry) ? '#3b82f6' : 'black'; 
-        const width = p.type === 'secondary' ? '2' : (p.thickness || 5).toString();
+        const width = (p.thickness || (p.type === 'secondary' ? 2 : 5)).toString();
         const dash = p.isDirt ? (width >= 4 ? '10,10' : '4,4') : 'none';
         let marker = isMain ? `url(#arrow-blue-${id})` : (!isEntry ? `url(#block-black-${id})` : '');
-        const dPath = catmullRom2bezier(p.points);
+        const dPath = pointsToPath(p.points, p.isStraight);
         return (
           <g key={p.id}>
             <path d={dPath} fill="none" stroke={color} strokeWidth={width} strokeDasharray={dash} strokeLinecap="butt" />
@@ -466,6 +499,7 @@ function StaticTulipRenderer({ data, id }) {
 }
 
 function TulipVectorEditor({ data, onSave, onCancel }) {
+  const [templateStates, setTemplateStates] = useState({ t_junction: 0, cross: 0, y_split: 0 });
   const normData = normalizeTulip(data);
   const [paths, setPaths] = useState(normData.paths);
   const [icons, setIcons] = useState(normData.icons);
@@ -478,15 +512,28 @@ function TulipVectorEditor({ data, onSave, onCancel }) {
   const [selectedPathId, setSelectedPathId] = useState(null); 
   const [showIconPicker, setShowIconPicker] = useState(false);
   const QUICK_ICON_TYPES = ["roundabout", "stop_traffic", "no_entry", "warning_danger"];
-  const getCoords = (e) => {
+  const togglePathStraight = () => {
+    if (!selectedPathId) return;
+    setPaths(paths.map(p => p.id === selectedPathId ? { ...p, isStraight: !p.isStraight } : p));
+  };
+
+  // --- FUNCIÓN CON SNAPPING ---
+  const getCoords = (e, useSnapping = true) => {
     const svg = svgRef.current;
     if (!svg) return { x: 50, y: 50 };
     let pt = svg.createSVGPoint();
     pt.x = e.clientX || (e.touches && e.touches[0].clientX);
     pt.y = e.clientY || (e.touches && e.touches[0].clientY);
     const loc = pt.matrixTransform(svg.getScreenCTM().inverse());
-    return { x: Math.max(-10, Math.min(110, loc.x)), y: Math.max(-10, Math.min(110, loc.y)) };
+    let x = Math.max(-10, Math.min(110, loc.x));
+    let y = Math.max(-10, Math.min(110, loc.y));
+    if (useSnapping) {
+      x = Math.round(x / 5) * 5;
+      y = Math.round(y / 5) * 5;
+    }
+    return { x, y };
   };
+
   const handlePointerDown = (e, target) => {
     e.stopPropagation();
     e.target.setPointerCapture(e.pointerId);
@@ -503,6 +550,7 @@ function TulipVectorEditor({ data, onSave, onCancel }) {
       setSelectedPathId(null);
     }
   };
+
   const handlePointerMove = (e) => {
     if (!dragging) return;
     const loc = getCoords(e);
@@ -517,12 +565,30 @@ function TulipVectorEditor({ data, onSave, onCancel }) {
       setIcons(icons.map(ic => ic.id === dragging.iconId ? { ...ic, x: loc.x, y: loc.y } : ic));
     }
   };
+
   const handlePointerUp = (e) => {
     if (dragging) {
       e.target.releasePointerCapture(e.pointerId);
       setDragging(null);
     }
   };
+
+  const applyTemplate = (type) => {
+  const variations = JUNCTION_TEMPLATES[type];
+  if (!variations) return;
+
+  // Calculamos el siguiente índice (ciclo)
+  const nextIdx = (templateStates[type] + 1) % variations.length;
+  setTemplateStates(prev => ({ ...prev, [type]: nextIdx }));
+
+  const selectedVar = variations[templateStates[type]];
+  
+  // Aplicamos la plantilla asegurando IDs únicos
+  setPaths(selectedVar.map(p => ({ ...p, id: crypto.randomUUID() })));
+  setIsRoundabout(false);
+  setSelectedPathId(null);
+};
+
   const handleLineDoubleClick = (e, pathId) => {
     e.stopPropagation();
     const loc = getCoords(e);
@@ -543,6 +609,7 @@ function TulipVectorEditor({ data, onSave, onCancel }) {
       return { ...path, points: newPts };
     }));
   };
+
   const handleDeletePoint = (e, pathId, pointIdx) => {
     e.stopPropagation();
     setPaths(paths.map(path => {
@@ -553,46 +620,56 @@ function TulipVectorEditor({ data, onSave, onCancel }) {
       return { ...path, points: newPts };
     }));
   };
+
   const deleteSelectedPath = () => {
     if (!selectedPathId || paths.length <= 1) return; 
     setPaths(paths.filter(p => p.id !== selectedPathId));
     setSelectedPathId(null);
   };
+
   const updateSelectedIconScale = (delta) => {
     if (!selectedIconId) return;
     setIcons(icons.map(ic => ic.id === selectedIconId ? { ...ic, scale: Math.max(0.5, Math.min(4, (ic.scale || 1) + delta)) } : ic));
   };
+
   const updateSelectedIconRotation = (delta) => {
     if (!selectedIconId) return;
     setIcons(icons.map(ic => ic.id === selectedIconId ? { ...ic, rotation: (ic.rotation || 0) + delta } : ic));
   };
+
   const deleteSelectedIcon = () => {
     if (!selectedIconId) return;
     setIcons(icons.filter(ic => ic.id !== selectedIconId));
     setSelectedIconId(null);
   };
+
   const togglePathDirt = () => {
     if (!selectedPathId) return;
     setPaths(paths.map(p => p.id === selectedPathId ? { ...p, isDirt: !p.isDirt } : p));
   };
+
   const togglePathHighway = () => {
     if (!selectedPathId) return;
     setPaths(paths.map(p => p.id === selectedPathId ? { ...p, isHighway: !p.isHighway } : p));
   };
+
   const cycleThickness = () => {
-    if (!selectedPathId) return;
-    setPaths(paths.map(p => {
-      if (p.id !== selectedPathId) return p;
-      let current = p.type === 'secondary' ? 2 : (p.thickness || 5);
-      let next = current === 5 ? 3.5 : (current === 3.5 ? 2 : 5);
-      return { ...p, type: p.type === 'secondary' ? 'wrong_way' : p.type, thickness: next };
-    }));
-  };
+  if (!selectedPathId) return;
+  setPaths(paths.map(p => {
+    if (p.id !== selectedPathId) return p;
+    let current = p.thickness || 3.5;
+    // Ciclo: 5 (Grueso) -> 3.5 (Medio) -> 2 (Fino)
+    let next = current === 5 ? 3.5 : (current === 3.5 ? 2 : 5);
+    return { ...p, thickness: next };
+  }));
+};
+
   const addIcon = (type, dataUrl = null) => {
     const newIcon = { id: crypto.randomUUID(), type, x: 50, y: 50, scale: 1, rotation: 0, dataUrl };
     setIcons([...icons, newIcon]);
     setSelectedIconId(newIcon.id);
   };
+
   const generateRoundabout = () => {
     const newPaths = [];
     const totalLegs = rExits + 1;
@@ -606,10 +683,39 @@ function TulipVectorEditor({ data, onSave, onCancel }) {
     setPaths(newPaths); setIsRoundabout(true);
     setSelectedPathId(null);
   };
+
   const selectedPath = paths.find(p => p.id === selectedPathId);
   const showThicknessBtn = selectedPath && selectedPath.type !== 'main';
+
   return (
-    <div className="flex flex-col items-center select-none w-full">
+    <div className="flex flex-col items-center select-none w-full p-4">
+      {/* SECCIÓN DE PLANTILLAS (Punto 3 / Paso C) */}
+      <div className="bg-gray-100 p-2 rounded border-2 border-gray-200 mb-2 w-full flex flex-col items-center">
+        <span className="text-[10px] font-bold uppercase text-gray-500 mb-1">Plantillas de Cruces</span>
+        <div className="flex gap-2">
+          {/* Botón T: Ahora usa 't_junction' y cambiará de lado cada vez que pulses */}
+          <button onPointerDown={(e) => { e.stopPropagation(); applyTemplate('t_junction'); }} className="bg-white border border-gray-300 p-1 rounded hover:bg-blue-50 transition-colors shadow-sm">
+            <svg viewBox="0 0 40 40" width="30" height="30" fill="none" stroke="black" strokeWidth="3">
+              <path d="M20 35 V5 M20 20 H5" />
+            </svg>
+          </button>
+
+          {/* Botón Cruz */}
+          <button onPointerDown={(e) => { e.stopPropagation(); applyTemplate('cross'); }} className="bg-white border border-gray-300 p-1 rounded hover:bg-blue-50 transition-colors shadow-sm">
+            <svg viewBox="0 0 40 40" width="30" height="30" fill="none" stroke="black" strokeWidth="3">
+              <path d="M20 35 V5 M5 20 H35" />
+            </svg>
+          </button>
+
+          {/* Botón Y: Cambiará la dirección principal cada vez que pulses */}
+          <button onPointerDown={(e) => { e.stopPropagation(); applyTemplate('y_split'); }} className="bg-white border border-gray-300 p-1 rounded hover:bg-blue-50 transition-colors shadow-sm">
+            <svg viewBox="0 0 40 40" width="30" height="30" fill="none" stroke="black" strokeWidth="3">
+              <path d="M20 35 V20 L10 10 M20 20 L30 10" />
+            </svg>
+          </button>
+        </div>
+      </div>
+
       <div className="bg-gray-100 p-2 rounded border-2 border-gray-200 mb-2 w-full flex flex-col items-center">
         <span className="text-[10px] font-bold uppercase text-gray-500 mb-1">Generador Rotonda</span>
         <div className="flex gap-2 items-center text-xs">
@@ -620,6 +726,7 @@ function TulipVectorEditor({ data, onSave, onCancel }) {
           <button onPointerDown={(e) => { e.stopPropagation(); generateRoundabout(); }} className="bg-blue-600 text-white font-bold px-2 py-1 rounded hover:bg-blue-700 ml-1 uppercase text-[10px]">Generar</button>
         </div>
       </div>
+
       <div className="w-64 h-64 border-2 border-dashed border-gray-400 bg-gray-50 mb-2 relative touch-none shadow-inner rounded overflow-hidden" onPointerDown={() => { setSelectedPathId(null); setSelectedIconId(null); }}>
         <svg ref={svgRef} viewBox="0 0 100 100" className="w-full h-full overflow-visible" onPointerMove={handlePointerMove} onPointerUp={handlePointerUp}>
           <defs>
@@ -634,10 +741,10 @@ function TulipVectorEditor({ data, onSave, onCancel }) {
             const isMain = path.type === 'main';
             const isEntry = path.type === 'entry';
             const color = isSelected ? "#f59e0b" : ((isMain || isEntry) ? '#3b82f6' : 'black'); 
-            const width = path.type === 'secondary' ? '2' : (path.thickness || 5).toString();
+            const width = (path.thickness || (path.type === 'secondary' ? 2 : 5)).toString();
             const dash = path.isDirt ? (width >= 4 ? '10,10' : '4,4') : 'none';
             let marker = isMain ? (isSelected ? "url(#editor-arrow-orange)" : "url(#editor-arrow-blue)") : (!isEntry ? (isSelected ? "url(#editor-block-orange)" : "url(#editor-block-black)") : '');
-            const dPath = catmullRom2bezier(path.points);
+            const dPath = pointsToPath(path.points, path.isStraight);
             return (
               <g key={path.id}>
                 <path d={dPath} stroke="transparent" strokeWidth="20" fill="none" onPointerDown={(e) => handlePointerDown(e, { type: 'path', pathId: path.id })} onDoubleClick={(e) => handleLineDoubleClick(e, path.id)} className="cursor-crosshair" />
@@ -670,6 +777,7 @@ function TulipVectorEditor({ data, onSave, onCancel }) {
           })}
         </svg>
       </div>
+
       {selectedIconId && (
         <div className="flex gap-1 mb-2 w-full justify-center">
           <button onPointerDown={(e) => { e.stopPropagation(); updateSelectedIconScale(-0.1); }} className="bg-gray-200 w-8 h-8 rounded font-bold text-xl flex items-center justify-center">-</button>
@@ -679,6 +787,7 @@ function TulipVectorEditor({ data, onSave, onCancel }) {
           <button onPointerDown={(e) => { e.stopPropagation(); deleteSelectedIcon(); }} className="bg-red-500 text-white px-3 rounded font-bold text-xs uppercase tracking-wide ml-2">Eliminar</button>
         </div>
       )}
+
       {selectedPathId && selectedPath && (
         <div className="flex flex-col gap-2 mb-2 w-full justify-center bg-gray-100 p-2 rounded border-2 border-gray-200">
           <span className="text-[10px] font-bold uppercase text-gray-500 text-center tracking-widest">Opciones de Vía</span>
@@ -689,28 +798,27 @@ function TulipVectorEditor({ data, onSave, onCancel }) {
             <button onPointerDown={(e) => { e.stopPropagation(); togglePathHighway(); }} className="bg-white border-2 border-gray-300 py-2 rounded shadow-sm font-bold text-[10px] uppercase hover:bg-gray-50 transition-colors">
               {selectedPath.isHighway ? 'Vía Única' : 'Autopista'}
             </button>
+            <button onPointerDown={(e) => { e.stopPropagation(); togglePathStraight(); }} className="bg-white border-2 border-gray-300 py-2 rounded shadow-sm font-bold text-[10px] uppercase hover:bg-gray-50 transition-colors">
+              {selectedPath.isStraight ? 'Hacer Curva' : 'Hacer Recta'}
+            </button>
             {showThicknessBtn && (
               <button onPointerDown={(e) => { e.stopPropagation(); cycleThickness(); }} className="bg-white border-2 border-gray-300 py-2 rounded shadow-sm font-bold text-[10px] uppercase hover:bg-gray-50 transition-colors">
-                Grosor: {(selectedPath.type === 'secondary' || selectedPath.thickness === 2) ? 'Fino' : (selectedPath.thickness === 3.5 ? 'Medio' : 'Grueso')}
+                Grosor: {(selectedPath.thickness === 2) ? 'Fino' : (selectedPath.thickness === 3.5 ? 'Medio' : 'Grueso')}
               </button>
             )}
-            {paths.length > 1 ? (
-              <button onPointerDown={(e) => { e.stopPropagation(); deleteSelectedPath(); }} className={`bg-red-600 text-white border-2 border-red-700 py-2 rounded shadow-sm font-bold text-[10px] uppercase hover:bg-red-700 transition-colors ${!showThicknessBtn ? 'col-span-2' : ''}`}>
-                Eliminar Vía
-              </button>
-            ) : (
-              <div className={`flex items-center justify-center text-[9px] text-red-500 font-bold text-center border-2 border-transparent ${!showThicknessBtn ? 'col-span-2' : ''}`}>No eliminable</div>
-            )}
+            <button onPointerDown={(e) => { e.stopPropagation(); deleteSelectedPath(); }} className="bg-red-600 text-white border-2 border-red-700 py-2 rounded shadow-sm font-bold text-[10px] uppercase hover:bg-red-700 transition-colors col-span-2">
+              Eliminar Vía
+            </button>
           </div>
         </div>
       )}
+
       <div className="flex flex-wrap gap-1 p-2 bg-gray-100 rounded border-2 border-gray-200 mb-2 w-full justify-center items-center">
         {QUICK_ICON_TYPES.map(type => {
           const icData = findIconByType(type);
-          if (!icData) return null;
           return (
             <button key={type} onPointerDown={(e) => { e.stopPropagation(); addIcon(type); }} className="w-8 h-8 p-1 border border-gray-300 bg-white rounded hover:bg-gray-50 flex items-center justify-center">
-              <div className="w-full h-full scale-125 flex items-center justify-center pointer-events-none">{icData.icon}</div>
+              <div className="w-full h-full scale-125 flex items-center justify-center pointer-events-none">{icData?.icon}</div>
             </button>
           );
         })}
@@ -718,14 +826,17 @@ function TulipVectorEditor({ data, onSave, onCancel }) {
           <Plus size={12}/> Más Iconos
         </button>
       </div>
+
       <div className="grid grid-cols-2 gap-2 mb-4 w-full">
         <button onPointerDown={(e) => { e.stopPropagation(); setPaths([...paths, { id: crypto.randomUUID(), type: 'wrong_way', isDirt: false, isHighway: false, thickness: 5, points: [{x: 50, y: 50}, {x: 20, y: 30}] }]); }} className="bg-black text-white font-bold py-3 rounded text-[10px] uppercase hover:bg-gray-800 transition-colors shadow">+ Adicional</button>
         <button onPointerDown={(e) => { e.stopPropagation(); setPaths([...paths, { id: crypto.randomUUID(), type: 'main', isDirt: false, isHighway: false, thickness: 5, points: [{x: 50, y: 90}, {x: 50, y: 10}] }]); }} className="bg-blue-600 text-white font-bold py-3 rounded text-[10px] uppercase hover:bg-blue-700 transition-colors shadow">+ Principal</button>
       </div>
+
       <div className="flex gap-2 mt-2 w-full">
         <button onPointerDown={onCancel} className="flex-1 bg-gray-300 font-bold uppercase text-sm py-3 rounded hover:bg-gray-400 transition-colors">Cancelar</button>
         <button onPointerDown={() => onSave({ paths, isRoundabout, icons })} className="flex-1 bg-green-600 text-white font-bold uppercase text-sm py-3 rounded hover:bg-green-700 transition-colors">Guardar</button>
       </div>
+
       {showIconPicker && (
         <UniversalIconPicker 
           onSelect={type => { addIcon(type); setShowIconPicker(false); }}
